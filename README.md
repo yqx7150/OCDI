@@ -1,6 +1,6 @@
 # OCDI
 
-Official implementation of **Back to Physics: Operator-Guided Generative Paths for SMS MRI Reconstruction**.
+Official implementation of **Operator-Guided k-space Reconstruction for Simultaneous Multi-Slice MRI**.
 
 ## Structure
 
