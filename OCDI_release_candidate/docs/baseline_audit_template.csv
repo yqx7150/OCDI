@@ -1,0 +1,9 @@
+method,code_commit,checkpoint_sha256,measurement_path,reference_origin,acs_lines,pe_axis,slice_ref_usage,ppa_ref_usage,coil_map_source,normalization_source,gt_invariance_passed,outer_acs_invariance_passed,subject_split_passed,run_log,status
+SG,,,,,,,,,,,,,,,unverified
+SPSG,,,,,,,,,,,,,,,unverified
+SENSE,,,,,,,,,,,,,,,unverified
+RAKI,,,,,,,,,,,,,,,unverified
+KDM,,,,,,,,,,,,,,,unverified
+ROGER,,,,,,,,,,,,,,,unverified
+FM,,,,,,,,,,,,,,,unverified
+OCDI,,,,,,,,,,,,,,,synthetic_only
