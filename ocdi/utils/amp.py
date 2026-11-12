@@ -17,7 +17,7 @@ def _amp_autocast(enabled=True, dtype=torch.float16, device='cuda'):
 
 
 def _amp_scaler(device='cuda'):
-    if _NEW_AMP:
+    if _NEW_AMP and hasattr(torch_amp, 'GradScaler'):
         return torch_amp.GradScaler(device)
     else:
-        return torch_amp.GradScaler()
+        return torch.cuda.amp.GradScaler()

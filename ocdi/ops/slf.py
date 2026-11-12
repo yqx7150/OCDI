@@ -65,8 +65,18 @@ def fit_slf_reference(
 
     mb, _, width, coils = reference_slices.shape
     kernel_h, kernel_w = int(kernel[0]), int(kernel[1])
-    kmb_reference = np.sum(reference_slices, axis=0).astype(np.complex64)
+    if not 0 < lf_lines <= width:
+        raise ValueError("lf_lines must be between 1 and width")
+    if kernel_h <= 0 or kernel_w <= 0 or kernel_h % 2 == 0 or kernel_w % 2 == 0:
+        raise ValueError("Reference kernels must have positive odd dimensions")
+    if not np.isfinite(lam) or lam < 0:
+        raise ValueError("lam must be finite and nonnegative")
     band_start, band_end = _band_bounds(width, lf_lines)
+    # Enforce central-ACS information support at the calibration boundary too.
+    reference_slices = reference_slices.copy()
+    reference_slices[:, :, :band_start] = 0
+    reference_slices[:, :, band_end:] = 0
+    kmb_reference = np.sum(reference_slices, axis=0).astype(np.complex64)
     x_mat, y_mat = _build_reference_system(
         kmb_reference,
         reference_slices,

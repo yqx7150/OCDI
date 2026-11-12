@@ -4,6 +4,7 @@ import argparse
 import math
 import os
 import re
+import random
 
 import numpy as np
 import torch
@@ -22,6 +23,9 @@ from ocdi.utils.visualization import save_grid, tensor_to_gray01
 
 def train():
     args = get_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     os.makedirs(args.save_dir, exist_ok=True)
     Ht, Wt = (None, None)
@@ -38,7 +42,7 @@ def train():
         ds_val = MB3FolderDataset(args.val_dir, T=args.T, alpha_sched=args.alpha_sched, amp_norm=args.amp_norm, amp_norm_mode=args.amp_norm_mode, sum23_div_sqrt2=args.sum23_div_sqrt2, target_hw=(Ht, Wt) if Ht and Wt else None, coils=args.coils, tsample='uniform')
     viz_epoch_dir = os.path.join(args.viz_dir, 'epoch_val')
     os.makedirs(viz_epoch_dir, exist_ok=True)
-    dl = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=False, persistent_workers=args.num_workers > 0, prefetch_factor=4)
+    dl = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=False, persistent_workers=args.num_workers > 0, prefetch_factor=4 if args.num_workers > 0 else None)
     C = args.coils
     in_ch = out_ch = 2 * C
     net = OCDINet(in_ch, out_ch, time_dim=128, base_ch=args.base_ch, k_big=(3, 9), T=args.T, use_xattn=args.xattn, xattn_heads=args.xattn_heads, xattn_window=args.xattn_window, xattn_mlp=args.xattn_mlp, use_aux_k23=args.use_aux_k23).to(device)
@@ -194,7 +198,7 @@ def train():
             if metric > best_metric:
                 best_metric = metric
                 best_path = os.path.join(args.save_dir, 'best_model.pt')
-                torch.save({'epoch': ep, 'model': net.state_dict(), 'psnr_mean': avg_psnr, 'psnr_max': max_psnr}, best_path)
+                torch.save({'epoch': ep, 'model': net.state_dict(), 'psnr_mean': avg_psnr, 'psnr_max': max_psnr, 'args': vars(args)}, best_path)
             if ema and backup_sd is not None:
                 net.load_state_dict(backup_sd)
     print('Training complete.')
@@ -202,6 +206,7 @@ def train():
 
 def get_args():
     p = argparse.ArgumentParser()
+    p.add_argument('--seed', type=int, default=2024)
     p.add_argument('--train_dir', type=str, default='')
     p.add_argument('--val_dir', type=str, default='')
     p.add_argument('--batch_size', type=int, default=8)
