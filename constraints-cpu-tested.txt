@@ -1,8 +1,0 @@
-# CPU validation environment; install torch CPU separately as documented.
-# Does not specify or certify a paper training CUDA environment.
-torch==2.5.1
-numpy==1.26.4
-scipy==1.14.1
-h5py==3.12.1
-matplotlib==3.9.2
-tqdm==4.67.1
