@@ -1,4 +1,0 @@
-include README.md requirements.txt constraints-cpu-tested.txt CHANGELOG.md
-recursive-include docs *.md *.csv *.json
-recursive-include tests *.py
-recursive-include reference *.py
