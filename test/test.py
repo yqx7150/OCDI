@@ -12,11 +12,11 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from ocdi.data.packed import load_packed_mb3_mat
+from ocdi.data.packed import load_measurement_mat, load_acs_reference_mat, load_mat_arrays, as_hwc, _field
 from ocdi.engine.inference import infer_mb_to_k1
 from ocdi.net import OCDINet
 from ocdi.ops.caipi import apply_fov_shift_2cchw
-from ocdi.ops.complex import quantile_scale_kmb, to_2cchw
+from ocdi.ops.complex import quantile_scale_kmb, to_2cchw, to_complex
 from ocdi.utils.metrics import k2img_sos_from_2cchw_matlab, roger_psnr_ssim_matlab_equiv
 
 
@@ -25,7 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ckpt", type=str, required=True)
     p.add_argument("--test_dir", type=str, required=True)
     p.add_argument("--out_dir", type=str, required=True)
-    p.add_argument("--slice_ref_dir", type=str, default="")
+    p.add_argument("--slice_ref_dir", type=str, default="", help="Zero-filled slice-resolved central ACS; retrospectively simulated, not an independent scan")
+    p.add_argument("--gt_dir", type=str, default="", help="Optional scoring-only K1/K2/K3; read after prediction")
+    p.add_argument("--seed", type=int, default=2024)
     p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     p.add_argument("--max_samples", type=int, default=0)
     p.add_argument("--T", type=int, default=64)
@@ -75,13 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _load_reference(path: str, coils: int):
-    r1, r2, r3, _ = load_packed_mb3_mat(path, coils)
-    return np.stack([r1, r2, r3], axis=0).astype(np.complex64)
+def _load_reference(path: str, coils: int, lines: int):
+    return load_acs_reference_mat(path, coils, lines)
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    torch.manual_seed(args.seed)
+    if args.T <= 0:
+        raise ValueError("--T must be positive")
     os.makedirs(args.out_dir, exist_ok=True)
 
     targets = [item.strip().lower() for item in args.targets.split(",") if item.strip()]
@@ -97,7 +101,7 @@ def main() -> None:
     recenter = {f"k{i + 1}": -shift_fracs[i] for i in range(3)}
     kernel_h, kernel_w = [int(item.strip()) for item in args.kernel.split(",")]
 
-    checkpoint = torch.load(args.ckpt, map_location="cpu")
+    checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=True)
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
     checkpoint_args = checkpoint.get("args", {}) if isinstance(checkpoint, dict) else {}
     coils = int(checkpoint_args.get("coils", args.coils))
@@ -125,11 +129,7 @@ def main() -> None:
         xattn_window=xattn_window, xattn_mlp=xattn_mlp,
         use_aux_k23=use_aux_k23,
     ).to(device)
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    if missing:
-        print("[WARN] missing keys:", missing[:10], "..." if len(missing) > 10 else "")
-    if unexpected:
-        print("[WARN] unexpected keys:", unexpected[:10], "..." if len(unexpected) > 10 else "")
+    model.load_state_dict(state_dict, strict=True)
     model.eval()
 
     test_paths = sorted(glob.glob(os.path.join(args.test_dir, "*.mat")))
@@ -138,8 +138,11 @@ def main() -> None:
     if not test_paths:
         raise RuntimeError(f"No .mat files found in {args.test_dir}")
 
-    reference_dir = os.path.abspath(args.slice_ref_dir) if args.slice_ref_dir.strip() else ""
-    if reference_dir and os.path.abspath(args.test_dir) == reference_dir:
+    reference_dir = os.path.realpath(args.slice_ref_dir) if args.slice_ref_dir.strip() else ""
+    gt_dir = os.path.realpath(args.gt_dir) if args.gt_dir.strip() else ""
+    if gt_dir and gt_dir in (os.path.realpath(args.test_dir), reference_dir):
+        raise ValueError("--gt_dir must be separate from measurements and ACS references")
+    if reference_dir and os.path.realpath(args.test_dir) == reference_dir:
         raise ValueError("--slice_ref_dir must be a separate directory from --test_dir.")
 
     reference_functions = None
@@ -168,12 +171,12 @@ def main() -> None:
     for path in tqdm(test_paths, desc="OCDI-Test", dynamic_ncols=True):
         name = os.path.splitext(os.path.basename(path))[0]
         try:
-            k1, k2, k3, kmb = load_packed_mb3_mat(path, coils)
+            kmb, measurement_mask = load_measurement_mat(path, coils)
+            if measurement_mask is not None and not measurement_mask.all():
+                raise ValueError("This entry point covers MB3R1 only; accelerated reconstruction requires the separately validated Stage-U implementation")
         except Exception as exc:
             raise RuntimeError(f"Failed to load test sample {name}: {exc}") from exc
 
-        target_slices = [k1, k2, k3]
-        target_tensors = [to_2cchw(k).to(device)[None] for k in target_slices]
         kmb_tensor = to_2cchw(kmb).to(device)[None]
 
         scale = 1.0
@@ -181,16 +184,17 @@ def main() -> None:
             scale = quantile_scale_kmb(kmb_tensor[0])
             if not math.isfinite(scale) or scale <= 0:
                 raise RuntimeError(f"Invalid normalization scale for {name}: {scale}")
-            target_tensors = [value / scale for value in target_tensors]
             kmb_tensor = kmb_tensor / scale
 
         reference_outputs = None
         if reference_dir:
             ref_path = os.path.join(reference_dir, os.path.basename(path))
             if not os.path.isfile(ref_path):
-                raise FileNotFoundError(f"Missing independently acquired slice-reference file: {ref_path}")
+                raise FileNotFoundError(f"Missing retrospectively simulated ACS reference file: {ref_path}")
             apply_reference, fit_reference, infer_with_reference, infer_with_reference_late, fuse_reference = reference_functions
-            reference_slices = _load_reference(ref_path, coils)
+            reference_slices = _load_reference(ref_path, coils, args.ref_lines)
+            if reference_slices.shape[1:] != kmb.shape:
+                raise ValueError("Reference and measurement dimensions differ")
             if args.amp_norm:
                 reference_slices = reference_slices / scale
             operator = fit_reference(
@@ -206,7 +210,6 @@ def main() -> None:
             idx = target_to_idx[target]
             shift = recenter[target]
             kmb_current = apply_fov_shift_2cchw(kmb_tensor, shift_frac=shift, axis=args.shift_axis)
-            gt_current = apply_fov_shift_2cchw(target_tensors[idx], shift_frac=shift, axis=args.shift_axis)
             target_reference = rest_reference = None
             if reference_outputs is not None:
                 target_reference = apply_fov_shift_2cchw(reference_outputs[idx], shift_frac=shift, axis=args.shift_axis)
@@ -267,7 +270,19 @@ def main() -> None:
                         else:
                             proposed = proposed_base
 
-            gt_image = k2img_sos_from_2cchw_matlab(gt_current[0]).detach().cpu().numpy()
+            # Persist reconstruction BEFORE any scoring-label read.
+            predicted_kspace = to_complex(proposed[0]).detach().cpu().numpy().transpose(1, 2, 0) * scale
+            np.savez_compressed(os.path.join(args.out_dir, f"{name}_{target}.npz"),
+                                K_pred=predicted_kspace, recenter_shift_frac=shift)
+            gt_image = None
+            if gt_dir:
+                gt_path = os.path.join(gt_dir, os.path.basename(path))
+                gt_array = as_hwc(_field(load_mat_arrays(gt_path), target.upper()), coils)
+                if gt_array.shape != kmb.shape:
+                    raise ValueError("Ground truth and measurement dimensions differ")
+                gt_current = apply_fov_shift_2cchw(to_2cchw(gt_array).to(device)[None] / scale,
+                                                  shift_frac=shift, axis=args.shift_axis)
+                gt_image = k2img_sos_from_2cchw_matlab(gt_current[0]).detach().cpu().numpy()
             net_image = k2img_sos_from_2cchw_matlab(net_prediction[0]).detach().cpu().numpy()
             proposed_image = k2img_sos_from_2cchw_matlab(proposed[0]).detach().cpu().numpy()
             metric_args = dict(
@@ -275,10 +290,13 @@ def main() -> None:
                 match_gain=not args.no_match_gain,
                 do_clip=not args.no_clip,
             )
-            psnr_net, ssim_net = roger_psnr_ssim_matlab_equiv(gt_image, net_image, **metric_args)
-            psnr_proposed, ssim_proposed = roger_psnr_ssim_matlab_equiv(gt_image, proposed_image, **metric_args)
+            if gt_image is not None:
+                psnr_net, ssim_net = roger_psnr_ssim_matlab_equiv(gt_image, net_image, **metric_args)
+                psnr_proposed, ssim_proposed = roger_psnr_ssim_matlab_equiv(gt_image, proposed_image, **metric_args)
+            else:
+                psnr_net = ssim_net = psnr_proposed = ssim_proposed = float("nan")
 
-            if reference_outputs is not None:
+            if reference_outputs is not None and gt_image is not None:
                 ref_image = k2img_sos_from_2cchw_matlab(target_reference[0]).detach().cpu().numpy()
                 psnr_ref, ssim_ref = roger_psnr_ssim_matlab_equiv(gt_image, ref_image, **metric_args)
             else:

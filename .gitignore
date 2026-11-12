@@ -12,7 +12,7 @@ results/
 viz/
 outputs/
 checkpoints/
-data/
-datasets/
+/data/
+/datasets/
 
 *.log

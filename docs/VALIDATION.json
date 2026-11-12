@@ -1,0 +1,61 @@
+{
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "python": "3.12.14",
+  "dependencies": {
+    "torch": "2.5.1+cpu",
+    "numpy": "1.26.4",
+    "scipy": "1.14.1",
+    "h5py": "3.12.1",
+    "matplotlib": "3.9.2",
+    "tqdm": "4.67.1"
+  },
+  "noneditable_wheel_install": true,
+  "checks_executed_outside_source_tree": true,
+  "unit_test_count": 14,
+  "dataset_parity_configurations": 32,
+  "model_parity_configurations": 4,
+  "checks": {
+    "pip_check": {
+      "passed": true,
+      "return_code": 0
+    },
+    "installed_location": {
+      "passed": true,
+      "return_code": 0
+    },
+    "train_help": {
+      "passed": true,
+      "return_code": 0
+    },
+    "test_help": {
+      "passed": true,
+      "return_code": 0
+    },
+    "prepare_help": {
+      "passed": true,
+      "return_code": 0
+    },
+    "split_help": {
+      "passed": true,
+      "return_code": 0
+    },
+    "unit_tests": {
+      "passed": true,
+      "return_code": 0
+    },
+    "original_parity": {
+      "passed": true,
+      "return_code": 0
+    },
+    "synthetic_integration": {
+      "passed": true,
+      "return_code": 0
+    },
+    "artifact_contents": {
+      "passed": true
+    }
+  },
+  "clinical_data_or_paper_metrics_verified": false,
+  "baseline_implementations_audited": false,
+  "cuda_verified": false
+}
